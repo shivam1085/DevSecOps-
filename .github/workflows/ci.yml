@@ -8,6 +8,7 @@ on:
   # Allow manual runs from the Actions UI or GitHub CLI
   workflow_dispatch:
 
+
 jobs:
   devsecops:
     runs-on: ubuntu-latest
@@ -35,7 +36,7 @@ jobs:
 
     - name: Run npm audit
       run: npm audit --json > npm-audit.json || true
-      
+
     - name: Upload npm audit report
       uses: actions/upload-artifact@v4
       with:
@@ -91,17 +92,20 @@ jobs:
     - name: Check DockerHub secrets
       run: |
         echo "DOCKERHUB_USERNAME or DOCKERHUB_TOKEN not set — skipping push steps"
-      if: ${{ secrets.DOCKERHUB_USERNAME == '' || secrets.DOCKERHUB_TOKEN == '' }}
+      if: ${{ !env.DOCKERHUB_USERNAME || !env.DOCKERHUB_TOKEN }}
+      env:
+        DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+        DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
 
     - name: Login to DockerHub
-      if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && success() }}
+      if: ${{ env.DOCKERHUB_USERNAME && env.DOCKERHUB_TOKEN }}
       uses: docker/login-action@v3
       with:
         username: ${{ secrets.DOCKERHUB_USERNAME }}
         password: ${{ secrets.DOCKERHUB_TOKEN }}
 
     - name: Push image to DockerHub
-      if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && success() }}
+      if: ${{ env.DOCKERHUB_USERNAME && env.DOCKERHUB_TOKEN }}
       uses: docker/build-push-action@v5
       with:
         context: .
