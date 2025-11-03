@@ -8,13 +8,11 @@ on:
   # Allow manual runs from the Actions UI or GitHub CLI
   workflow_dispatch:
 
-
 jobs:
   devsecops:
     runs-on: ubuntu-latest
 
     steps:
-
     - name: Checkout repository
       uses: actions/checkout@v3
 
@@ -22,26 +20,67 @@ jobs:
       uses: actions/setup-node@v3
       with:
         node-version: 18
+        cache: 'npm'
+
+    - name: Cache node modules
+      uses: actions/cache@v3
+      with:
+        path: ~/.npm
+        key: ${{ runner.os }}-node-${{ hashFiles('**/package-lock.json') }}
+        restore-keys: |
+          ${{ runner.os }}-node-
 
     - name: Install dependencies
-      run: npm install
+      run: npm ci
+
+    - name: Run npm audit
+      run: npm audit --json > npm-audit.json || true
+      
+    - name: Upload npm audit report
+      uses: actions/upload-artifact@v4
+      with:
+        name: npm-audit-report
+        path: npm-audit.json
 
     - name: Static Code Analysis (Semgrep)
       run: |
         pip install semgrep
         semgrep --config auto . || true
 
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
     - name: Build Docker image
-      run: docker build -t devsecops-app .
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        load: true
+        tags: devsecops-app:latest
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
 
     - name: Scan Docker image with Trivy (JSON)
       uses: aquasecurity/trivy-action@master
       with:
-        image-ref: 'devsecops-app'
+        image-ref: 'devsecops-app:latest'
         format: 'json'
         output: 'trivy-report.json'
         severity: 'CRITICAL,HIGH'
         exit-code: '0'
+
+    - name: Generate Vulnerability Summary
+      run: |
+        echo "### Security Scan Summary" > security-summary.md
+        echo "#### Docker Image Vulnerabilities" >> security-summary.md
+        jq -r '.Results[] | select(.Vulnerabilities) | "Found \(.Vulnerabilities | length) vulnerabilities in \(.Target)"' trivy-report.json >> security-summary.md
+        echo "#### NPM Audit Results" >> security-summary.md
+        jq -r '"Found \(.metadata.vulnerabilities.total) total vulnerabilities"' npm-audit.json >> security-summary.md || echo "No NPM audit results found" >> security-summary.md
+
+    - name: Upload Security Summary
+      uses: actions/upload-artifact@v4
+      with:
+        name: security-summary
+        path: security-summary.md
 
     - name: Upload Trivy report
       uses: actions/upload-artifact@v4
@@ -63,6 +102,10 @@ jobs:
 
     - name: Push image to DockerHub
       if: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' && success() }}
-      run: |
-        docker tag devsecops-app ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-app:latest
-        docker push ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-app:latest
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        push: true
+        tags: ${{ secrets.DOCKERHUB_USERNAME }}/devsecops-app:latest,${{ secrets.DOCKERHUB_USERNAME }}/devsecops-app:${{ github.sha }}
+        cache-from: type=gha
+        cache-to: type=gha,mode=max
